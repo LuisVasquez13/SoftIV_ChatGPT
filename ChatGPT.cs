@@ -3,6 +3,7 @@ using OpenAI.Chat;
 using System;
 using System.ClientModel;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -10,39 +11,40 @@ namespace SoftIV_ChatGPT
 {
     public partial class FormChat : Form
     {
-        // Cliente oficial ChatClient 2.5.0
         private ChatClient chatClient;
 
-        // Historial de conversación (solo strings para mantener memoria corta)
+        // Historial de conversación para memoria corta
         private List<string> conversationHistory = new List<string>();
         private const int MaxHistory = 10; // Últimos 10 turnos
 
         public FormChat()
         {
             InitializeComponent();
-
-            // Inicializa cliente de OpenAI
             InicializarOpenAI();
-
-            // Asociar eventos a controles
             AsociarEventos();
         }
 
         /// <summary>
-        /// Inicializa el cliente ChatClient con API key desde variable de entorno
+        /// Inicializa el cliente OpenAI con la API key desde variable de entorno
         /// </summary>
         private void InicializarOpenAI()
         {
             try
             {
+                // KEY
                 string apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
                 if (string.IsNullOrEmpty(apiKey))
-                    throw new Exception("Variable de entorno OPENAI_API_KEY no definida.");
+                {
+                    lblEstado.Text = "API key no definida. Por favor, configura OPENAI_API_KEY";
+                    btnEnviar.Enabled = false;
+                    return; // Terminar inicialización
+                }
 
                 chatClient = new ChatClient(
                     model: "gpt-4o-mini",
                     credential: new ApiKeyCredential(apiKey)
                 );
+
 
                 lblEstado.Text = "Listo";
             }
@@ -82,8 +84,9 @@ namespace SoftIV_ChatGPT
         {
             string prompt = txtPrompt.Text.Trim();
 
-            // Validaciones
+            // Validaciones de entrada
             if (string.IsNullOrWhiteSpace(prompt)) return;
+
             if (prompt.Length > 1000)
             {
                 MessageBox.Show("Mensaje demasiado largo (máx. 1000 caracteres).");
@@ -101,30 +104,39 @@ namespace SoftIV_ChatGPT
                 // Normalizar saltos de línea
                 prompt = prompt.Replace("\r\n", "\n");
 
-                // Agregar mensaje al historial
+                // Mantener historial de memoria corta
                 conversationHistory.Add("Tú: " + prompt);
                 if (conversationHistory.Count > MaxHistory)
                     conversationHistory.RemoveAt(0);
 
-                // Concatenar historial para enviar al modelo
                 string context = string.Join("\n", conversationHistory);
 
                 // Llamada asincrónica al modelo
                 ChatCompletion completion = await chatClient.CompleteChatAsync(context);
-
                 string respuesta = completion.Content[0].Text.Trim();
 
-                // Mostrar respuesta del asistente
                 txtChat.AppendText("Asistente: " + respuesta + Environment.NewLine);
 
-                // Agregar respuesta al historial
                 conversationHistory.Add("Asistente: " + respuesta);
+            }
+            catch (HttpRequestException)
+            {
+                // Error de red / servidor inaccesible
+                txtChat.AppendText("No se pudo conectar al servidor. Verifica tu conexión a Internet." + Environment.NewLine);
             }
             catch (Exception ex)
             {
-                // Captura errores de red / API
-                txtChat.AppendText("No se pudo conectar. Intenta de nuevo." + Environment.NewLine);
-                txtChat.AppendText("Error: " + ex.Message + Environment.NewLine);
+                // Detectar errores comunes de la librería
+                string msg = ex.Message.ToLower();
+
+                if (msg.Contains("401"))
+                    txtChat.AppendText("API key inválida o ausente." + Environment.NewLine);
+                else if (msg.Contains("429"))
+                    txtChat.AppendText("Límite alcanzado, espera unos segundos." + Environment.NewLine);
+                else if (msg.Contains("5") || msg.Contains("retry failed"))
+                    txtChat.AppendText("Servicio ocupado o no disponible. Reintentar más tarde." + Environment.NewLine);
+                else
+                    txtChat.AppendText("Error inesperado: " + ex.Message + Environment.NewLine);
             }
             finally
             {
